@@ -1,5 +1,8 @@
 package io.spring.sample.dashboard.stats;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
+import io.micrometer.core.instrument.MeterRegistry;
 import io.spring.sample.dashboard.stats.support.ReverseLookupDescriptor;
 import reactor.core.publisher.Mono;
 
@@ -8,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.ClientResponse;
+import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 
 @Component
@@ -15,8 +19,8 @@ public class ReverseLookupClient {
 
 	private final WebClient client;
 
-	public ReverseLookupClient(WebClient.Builder builder) {
-		this.client = builder.build();
+	public ReverseLookupClient(WebClient.Builder builder, MeterRegistry registry) {
+		this.client = builder.filter(rateLimitRemainingMetric(registry)).build();
 	}
 
 	public Mono<ReverseLookupDescriptor> freeReverseLookup(String ip) {
@@ -38,6 +42,18 @@ public class ReverseLookupClient {
 	public Mono<ReverseLookupDescriptor> payingReverseLookup(String ip) {
 		return this.client.get().uri("http://localhost:8081/reverse-lookup/costly/{ip}", ip)
 				.retrieve().bodyToMono(ReverseLookupDescriptor.class);
+	}
+
+	private ExchangeFilterFunction rateLimitRemainingMetric(MeterRegistry registry) {
+		AtomicInteger rateLimitRemaining = registry
+				.gauge("reverselookup.ratelimit.remaining", new AtomicInteger(0));
+		return (request, next) -> next.exchange(request)
+				.doOnNext(response -> {
+					int remaining = getRateLimitRemaining(response.headers().asHttpHeaders());
+					if (remaining != -1) {
+						rateLimitRemaining.set(remaining);
+					}
+				});
 	}
 
 	private int getRateLimitRemaining(HttpHeaders headers) {
