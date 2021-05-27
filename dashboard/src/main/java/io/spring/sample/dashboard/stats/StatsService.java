@@ -6,6 +6,7 @@ import java.util.List;
 import io.spring.sample.dashboard.DashboardProperties;
 import io.spring.sample.dashboard.stats.support.Event;
 import io.spring.sample.dashboard.stats.support.GenerationStatistics;
+import io.spring.sample.dashboard.stats.support.GeneratorClient;
 import io.spring.sample.dashboard.stats.support.ReverseLookupDescriptor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -44,8 +45,13 @@ public class StatsService {
 	private Flux<ReverseLookupDescriptor> fetchTopClients(String fromDate, String toDate) {
 		return statsClient.fetchGeneratorClients(fromDate, toDate)
 				.flatMap(client -> lookupClient.freeReverseLookup(client.getIp())
-						.timeout(this.timeout, this.lookupClient.payingReverseLookup(client.getIp()))
+						.onErrorResume(RateLimitException.class, (ex) -> fallbackReverseLookup(client))
+						.timeout(this.timeout, fallbackReverseLookup(client))
 				);
+	}
+
+	private Mono<ReverseLookupDescriptor> fallbackReverseLookup(GeneratorClient client) {
+		return this.lookupClient.payingReverseLookup(client.getIp());
 	}
 
 }
